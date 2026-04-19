@@ -41,7 +41,43 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 # --- MongoDB Cache ---
-from mongo_cache_migration.mongo_cache_migration.mongo_cache import MongoCache
+
+from mongo_cache_migration.mongo_cache import MongoCache
+
+# --- Serialization helpers ---
+def serialize_media_info(media_info):
+    # Handles aiogram types and dicts
+    if isinstance(media_info, dict):
+        result = {}
+        for k, v in media_info.items():
+            # Only keep serializable types
+            if isinstance(v, (str, int, float, bool, type(None))):
+                result[k] = v
+        return result
+    # aiogram objects
+    if hasattr(media_info, "file_id"):
+        return {
+            "file_id": getattr(media_info, "file_id", None),
+            "file_unique_id": getattr(media_info, "file_unique_id", None),
+            "duration": getattr(media_info, "duration", None),
+            "performer": getattr(media_info, "performer", None),
+            "title": getattr(media_info, "title", None),
+            "file_name": getattr(media_info, "file_name", None),
+            "mime_type": getattr(media_info, "mime_type", None),
+            "file_size": getattr(media_info, "file_size", None),
+        }
+    return str(media_info)
+
+# For yt-dlp info dicts, remove unserializable objects
+def serialize_info(info):
+    if not isinstance(info, dict):
+        return str(info)
+    result = {}
+    for k, v in info.items():
+        if isinstance(v, (str, int, float, bool, type(None), list, dict)):
+            result[k] = v
+        # skip objects like FFmpegMergerPP
+    return result
 
 
 def getenv(key, default=None):
@@ -181,7 +217,20 @@ class MongoStateStorage(BaseStateStorage):
         return state
 
     async def save(self, chat_id: int, state: dict[str, Any]) -> None:
+        # Очистка элементов очереди и current перед сохранением
+        def clean_item(d):
+            allowed = {
+                "id", "kind", "title", "stream_source", "cleanup_path", "duration", "requested_by", "requested_by_id", "original_query", "source_label", "thumb_path", "views", "channel", "uploader"
+            }
+            return {k: v for k, v in d.items() if k in allowed and not isinstance(v, (bytes, bytearray))}
+
         payload = copy.deepcopy(state)
+        # Очистить очередь
+        if "queue" in payload and isinstance(payload["queue"], list):
+            payload["queue"] = [clean_item(item) for item in payload["queue"] if isinstance(item, dict)]
+        # Очистить current
+        if "current" in payload and isinstance(payload["current"], dict):
+            payload["current"] = clean_item(payload["current"])
         payload["chat_id"] = chat_id
         await self._collection.replace_one({"chat_id": chat_id}, payload, upsert=True)
 
@@ -588,6 +637,10 @@ async def build_query_track(query: str, force_video: bool, message: types.Messag
 
 
 def detect_message_media(message: types.Message) -> dict[str, Any] | None:
+    def get_file_id(obj):
+        # aiogram v3: all file-like objects have .file_id
+        return getattr(obj, "file_id", None)
+
     if message.audio:
         audio = message.audio
         performer = audio.performer or ""
@@ -596,6 +649,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
         return {
             "kind": "audio",
             "file": audio,
+            "file_id": get_file_id(audio),
             "title": joined or "Audio",
             "duration": audio.duration,
             "extension": extract_extension(audio.file_name, audio.mime_type, ".mp3"),
@@ -606,6 +660,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
         return {
             "kind": "audio",
             "file": voice,
+            "file_id": get_file_id(voice),
             "title": "Voice message",
             "duration": voice.duration,
             "extension": ".ogg",
@@ -616,6 +671,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
         return {
             "kind": "video",
             "file": video,
+            "file_id": get_file_id(video),
             "title": video.file_name or "Video",
             "duration": video.duration,
             "extension": extract_extension(video.file_name, video.mime_type, ".mp4"),
@@ -626,6 +682,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
         return {
             "kind": "video",
             "file": note,
+            "file_id": get_file_id(note),
             "title": "Video note",
             "duration": note.duration,
             "extension": ".mp4",
@@ -636,6 +693,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
         return {
             "kind": "video",
             "file": animation,
+            "file_id": get_file_id(animation),
             "title": animation.file_name or "Animation",
             "duration": animation.duration,
             "extension": extract_extension(animation.file_name, animation.mime_type, ".mp4"),
@@ -650,6 +708,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
             return {
                 "kind": "audio",
                 "file": document,
+                "file_id": get_file_id(document),
                 "title": document.file_name or "Audio file",
                 "duration": None,
                 "extension": extract_extension(document.file_name, document.mime_type, ".mp3"),
@@ -658,6 +717,7 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
             return {
                 "kind": "video",
                 "file": document,
+                "file_id": get_file_id(document),
                 "title": document.file_name or "Video file",
                 "duration": None,
                 "extension": extract_extension(document.file_name, document.mime_type, ".mp4"),
@@ -682,7 +742,7 @@ async def download_telegram_media(media_info: dict[str, Any]) -> Path:
     data = buf.getvalue()
     if mongo_cache is None:
         raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
-    await mongo_cache.save_file(cache_key, data, {"media_info": media_info})
+    await mongo_cache.save_file(cache_key, data, {"media_info": serialize_media_info(media_info)})
     return data
 
 
@@ -698,6 +758,15 @@ async def build_reply_track(message: types.Message, media_message: types.Message
     requested_by = safe_user_name(message)
     requested_by_id = message.from_user.id if message.from_user else None
 
+    # Сохраняем файл в кеш по ключу song:{file_id} для поддержки seek
+    file_id = media_info.get("file_id")
+    if file_id and os.path.exists(str(local_path)):
+        with open(str(local_path), "rb") as f:
+            data = f.read()
+        cache_key = f"song:{file_id}"
+        if mongo_cache is not None:
+            await mongo_cache.save_file(cache_key, data, {"media_info": serialize_media_info(media_info)})
+
     return build_track_item(
         kind=media_info["kind"],
         title=media_info["title"],
@@ -706,7 +775,7 @@ async def build_reply_track(message: types.Message, media_message: types.Message
         duration=media_info.get("duration"),
         requested_by=requested_by,
         requested_by_id=requested_by_id,
-        original_query=None,
+        original_query=file_id,  # теперь original_query = file_id для Telegram
         source_label="telegram",
     )
 
@@ -802,23 +871,39 @@ async def start_playback_locked(
                 thumb_file = BufferedInputFile(data, filename=f"{video_id}.jpg")
             else:
                 try:
+                    # Передаём максимум информации для генерации обложки
                     song_obj = type("Song", (), {
                         "id": video_id,
                         "title": item.get("title", "Unknown Song"),
-                        "views": item.get("views", 0)
+                        "views": item.get("views", 0),
+                        "channel": item.get("channel") or item.get("uploader"),
+                        "uploader": item.get("uploader"),
+                        "duration": item.get("duration") or item.get("duration_string"),
+                        "thumbnail": item.get("thumbnail")
                     })()
-                    thumb_path = await Thumbnail().generate(song_obj)
-                    if thumb_path and os.path.exists(thumb_path):
-                        with open(thumb_path, "rb") as fp:
-                            data = fp.read()
-                        await mongo_cache.save_file(cache_key, data, {"video_id": video_id})
-                        from aiogram.types import BufferedInputFile
-                        thumb_file = BufferedInputFile(data, filename=f"{video_id}.jpg")
+                    thumb_result = await Thumbnail().generate(song_obj)
+                    from aiogram.types import BufferedInputFile
+                    import os
+                    if thumb_result:
+                        if isinstance(thumb_result, bytes):
+                            data = thumb_result
+                            await mongo_cache.save_file(cache_key, data, {"video_id": video_id})
+                            thumb_file = BufferedInputFile(data, filename=f"{video_id}.jpg")
+                        elif isinstance(thumb_result, str) and os.path.exists(thumb_result):
+                            with open(thumb_result, "rb") as fp:
+                                data = fp.read()
+                            await mongo_cache.save_file(cache_key, data, {"video_id": video_id})
+                            thumb_file = BufferedInputFile(data, filename=f"{video_id}.jpg")
+                        else:
+                            thumb_file = None
+                    else:
+                        thumb_file = None
                 except Exception:
                     thumb_file = None
         elif video_id:
             logger.warning(f"Некорректный YouTube video_id: {video_id!r}. Использую DEFAULT_THUMB.")
     if not thumb_file:
+        logger.warning(f"[Thumb Debug] Не удалось получить кастомную обложку для item={item.get('title', 'no-title')}, video_id={video_id}, использую DEFAULT_THUMB")
         thumb_url = getattr(config, "DEFAULT_THUMB", None)
 
     def build_progress_bar(current, total, width=12):
@@ -1051,15 +1136,25 @@ async def enqueue_or_start(chat_id: int, item: dict[str, Any]) -> tuple[str, int
     runtime = get_runtime(chat_id)
     async with runtime.lock:
         state = await get_state(chat_id)
+
+        # Очищаем item от больших полей перед сохранением в очередь/state
+        def clean_item(d):
+            allowed = {
+                "id", "kind", "title", "stream_source", "cleanup_path", "duration", "requested_by", "requested_by_id", "original_query", "source_label", "thumb_path", "views", "channel", "uploader"
+            }
+            return {k: v for k, v in d.items() if k in allowed and not isinstance(v, (bytes, bytearray))}
+
+        safe_item = clean_item(item)
+
         if state.get("current"):
-            state["queue"].append(item)
+            state["queue"].append(safe_item)
             await set_state(chat_id, state)
             return "queued", len(state["queue"])
 
         try:
-            await start_playback_locked(chat_id, state, runtime, item)
+            await start_playback_locked(chat_id, state, runtime, safe_item)
         except Exception:
-            cleanup_item(item)
+            cleanup_item(safe_item)
             raise
         return "started", None
 
@@ -1293,10 +1388,12 @@ async def play_cmd(message: types.Message, command: CommandObject):
         item = await resolve_track_request(message, command, force_video=False)
         # Если это YouTube URL, получаем info через yt-dlp
         info = None
+        file_path = None
         if looks_like_url(item.get("original_query", "")):
             def worker():
                 with YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-                    return ydl.extract_info(item["original_query"], download=False)
+                    # Скачиваем файл (download=True) и получаем info
+                    return ydl.extract_info(item["original_query"], download=True)
             info = await asyncio.to_thread(worker)
             # Обновляем item
             if info:
@@ -1305,6 +1402,35 @@ async def play_cmd(message: types.Message, command: CommandObject):
                 item["duration"] = info.get("duration")
                 item["thumbnail"] = info.get("thumbnail")
                 item["views"] = info.get("view_count")
+                # Сохраняем исходный файл в mongo_cache для seek (YouTube)
+                if info.get("requested_downloads"):
+                    # yt-dlp >=2023.07.06: requested_downloads[0]["filepath"]
+                    file_path = info["requested_downloads"][0]["filepath"]
+                else:
+                    # yt-dlp <2023: _filename
+                    file_path = info.get("_filename")
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                    cache_key = f"song:{item.get('original_query', '').strip().lower()}"
+                    if mongo_cache is not None:
+                        await mongo_cache.save_file(
+                            cache_key, data,
+                            {"info": serialize_info(info), "original_query": item.get('original_query', '')}
+                        )
+
+        # Сохраняем исходный файл в mongo_cache для seek для других источников (например, Telegram-файлы)
+        # file_path может быть в item["file_path"] или item["audio_file_path"]
+        generic_file_path = item.get("file_path") or item.get("audio_file_path")
+        if generic_file_path and os.path.exists(generic_file_path):
+            with open(generic_file_path, "rb") as f:
+                data = f.read()
+            cache_key = f"song:{item.get('original_query', '').strip().lower()}"
+            if mongo_cache is not None:
+                await mongo_cache.save_file(
+                    cache_key, data,
+                    {"info": serialize_info(info) if info else {}, "original_query": item.get('original_query', '')}
+                )
         # Передаём все поля item в Thumbnail.generate
         if item.get("id"):
             try:
@@ -1408,8 +1534,18 @@ async def song_cmd(message: types.Message, command: CommandObject):
     file_path: Path | None = None
     try:
         file_path, info = await download_song(query)
-        audio = FSInputFile(file_path)
-        title = info.get("title") or file_path.stem
+        # Проверяем, что file_path — это путь к файлу, а не байты
+        audio = None
+        if isinstance(file_path, (str, Path)) and os.path.exists(str(file_path)):
+            # Явно указываем filename для FSInputFile
+            audio = FSInputFile(str(file_path), filename="song.mp3")
+        elif isinstance(file_path, bytes):
+            from aiogram.types import BufferedInputFile
+            audio = BufferedInputFile(file_path, filename="song.mp3")
+        else:
+            raise ValueError("Некорректный тип file_path для аудиофайла")
+
+        title = info.get("title") or (file_path.stem if hasattr(file_path, "stem") else "Song")
         performer = info.get("uploader") or info.get("artist")
         duration = info.get("duration")
         # Генерируем кастомную обложку через thumbnails.py
@@ -1429,7 +1565,7 @@ async def song_cmd(message: types.Message, command: CommandObject):
             except Exception:
                 thumb_path = None
         if thumb_path and os.path.exists(thumb_path):
-            thumb_file = FSInputFile(thumb_path)
+            thumb_file = FSInputFile(thumb_path, filename="thumb.jpg")
         else:
             thumb_file = None
         await message.reply_audio(
@@ -1442,9 +1578,13 @@ async def song_cmd(message: types.Message, command: CommandObject):
         )
     except Exception as exc:
         logger.exception("Ошибка в /song")
+        # Ограничиваем длину сообщения об ошибке, чтобы избежать TelegramBadRequest
+        error_text = playback_error_text(exc)
+        if len(error_text) > 3500:
+            error_text = error_text[:3500] + "..."
         await message.reply(
             "<b>Не удалось скачать трек.</b>\n"
-            f"{playback_error_text(exc)}"
+            f"{error_text}"
         )
 
 
@@ -1637,7 +1777,7 @@ async def seek_cmd(message: types.Message, command: CommandObject):
     try:
         seconds = int(command_args(command))
     except Exception:
-        await message.reply("<b>Пример: /seek 120</b>")
+        await message.reply("<b>Использование: /seek &lt;секунды&gt;\nНапример: /seek 120</b>")
         return
     if seconds <= 0:
         await message.reply("<b>Укажите положительное число секунд.</b>")
@@ -1655,8 +1795,17 @@ async def seek_cmd(message: types.Message, command: CommandObject):
         if mongo_cache is None:
             raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
         cached = await mongo_cache.get_file(cache_key)
+        # Если не найдено по original_query, пробуем по file_id (для Telegram)
+        if not cached and current.get('original_query') and len(str(current.get('original_query'))) > 0:
+            alt_cache_key = f"song:{current.get('original_query')}"
+            cached = await mongo_cache.get_file(alt_cache_key)
+        if not cached and current.get('file_id'):
+            alt_cache_key = f"song:{current.get('file_id')}"
+            cached = await mongo_cache.get_file(alt_cache_key)
         if not cached:
-            await message.reply("<b>Исходный файл не найден в кеше.</b>")
+            await message.reply(
+                "<b>Исходный файл не найден в кеше.\n\nПеремотка доступна только для треков, которые были добавлены через /play, /vplay или reply на файл, либо уже были закешированы. Попробуйте добавить трек заново.</b>"
+            )
             return
         data, meta = cached
         # Обрезаем через ffmpeg
@@ -1683,7 +1832,7 @@ async def seekback_cmd(message: types.Message, command: CommandObject):
     try:
         seconds = int(command_args(command))
     except Exception:
-        await message.reply("<b>Пример: /seekback 10</b>")
+        await message.reply("<b>Использование: /seekback &lt;секунды&gt;\nНапример: /seekback 10</b>")
         return
     if seconds <= 0:
         await message.reply("<b>Укажите положительное число секунд.</b>")
@@ -1704,8 +1853,17 @@ async def seekback_cmd(message: types.Message, command: CommandObject):
         if mongo_cache is None:
             raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
         cached = await mongo_cache.get_file(cache_key)
+        # Если не найдено по original_query, пробуем по file_id (для Telegram)
+        if not cached and current.get('original_query') and len(str(current.get('original_query'))) > 0:
+            alt_cache_key = f"song:{current.get('original_query')}"
+            cached = await mongo_cache.get_file(alt_cache_key)
+        if not cached and current.get('file_id'):
+            alt_cache_key = f"song:{current.get('file_id')}"
+            cached = await mongo_cache.get_file(alt_cache_key)
         if not cached:
-            await message.reply("<b>Исходный файл не найден в кеше.</b>")
+            await message.reply(
+                "<b>Исходный файл не найден в кеше.\n\nПеремотка доступна только для треков, которые были добавлены через /play, /vplay или reply на файл, либо уже были закешированы. Попробуйте добавить трек заново.</b>"
+            )
             return
         data, meta = cached
         # Обрезаем через ffmpeg
@@ -1765,6 +1923,8 @@ async def main():
     dp.message(Command("resume"))(resume_cmd)
     dp.message(Command("skip"))(skip_cmd)
     dp.message(Command("end", "stop"))(end_cmd)
+    dp.message(Command("seek"))(seek_cmd)
+    dp.message(Command("seekback"))(seekback_cmd)
     # dp.message(lambda message: (message.text or message.caption or "").startswith("/"))(unknown_command_cmd)
 
     # === Регистрация callback-хендлеров для inline-кнопок ===

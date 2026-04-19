@@ -1,3 +1,8 @@
+# --- Unicode normalization for Armenian letters ---
+def convert_fancy_armenian(text):
+    # Пока нет стандартизированных fancy-армянских диапазонов, но если появятся — добавить сюда
+    # Сейчас просто нормализуем Unicode (NFKC)
+    return unicodedata.normalize('NFKC', text)
 import os
 import aiohttp
 import traceback
@@ -10,6 +15,12 @@ import logging
 import shutil
 import re
 import config
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logging.info('thumbnails.py запущен')
 ITALIC_TO_REGULAR =str .maketrans ({119860 :'A',119861 :'B',119862 :'C',119863 :'D',119864 :'E',119865 :'F',119866 :'G',119867 :'H',119868 :'I',119869 :'J',119870 :'K',119871 :'L',119872 :'M',119873 :'N',119874 :'O',119875 :'P',119876 :'Q',119877 :'R',119878 :'S',119879 :'T',119880 :'U',119881 :'V',119882 :'W',119883 :'X',119884 :'Y',119885 :'Z',119886 :'a',119887 :'b',119888 :'c',119889 :'d',119890 :'e',119891 :'f',119892 :'g',119893 :'h',119894 :'i',119895 :'j',119896 :'k',119897 :'l',119898 :'m',119899 :'n',119900 :'o',119901 :'p',119902 :'q',119903 :'r',119904 :'s',119905 :'t',119906 :'u',119907 :'v',119908 :'w',119909 :'x',119910 :'y',119911 :'z',120328 :'A',120329 :'B',120330 :'C',120331 :'D',120332 :'E',120333 :'F',120334 :'G',120335 :'H',120336 :'I',120337 :'J',120338 :'K',120339 :'L',120340 :'M',120341 :'N',120342 :'O',120343 :'P',120344 :'Q',120345 :'R',120346 :'S',120347 :'T',120348 :'U',120349 :'V',120350 :'W',120351 :'X',120352 :'Y',120353 :'Z',120354 :'a',120355 :'b',120356 :'c',120357 :'d',120358 :'e',120359 :'f',120360 :'g',120361 :'h',120362 :'i',120363 :'j',120364 :'k',120365 :'l',120366 :'m',120367 :'n',120368 :'o',120369 :'p',120370 :'q',120371 :'r',120372 :'s',120373 :'t',120374 :'u',120375 :'v',120376 :'w',120377 :'x',120378 :'y',120379 :'z',120380 :'A',120381 :'B',120382 :'C',120383 :'D',120384 :'E',120385 :'F',120386 :'G',120387 :'H',120388 :'I',120389 :'J',120390 :'K',120391 :'L',120392 :'M',120393 :'N',120394 :'O',120395 :'P',120396 :'Q',120397 :'R',120398 :'S',120399 :'T',120400 :'U',120401 :'V',120402 :'W',120403 :'X',120404 :'Y',120405 :'Z',120406 :'a',120407 :'b',120408 :'c',120409 :'d',120410 :'e',120411 :'f',120412 :'g',120413 :'h',120414 :'i',120415 :'j',120416 :'k',120417 :'l',120418 :'m',120419 :'n',120420 :'o',120421 :'p',120422 :'q',120423 :'r',120424 :'s',120425 :'t',120426 :'u',120427 :'v',120428 :'w',120429 :'x',120430 :'y',120431 :'z'})
 
 def convert_italic_unicode (text ):
@@ -99,26 +110,35 @@ for style in FONTS :
         FONTS [style ].append (ImageFont .load_default (size =52 ))
 
 def load_font_with_fallback (size ,style ='regular'):
-    target_fonts =ALL_FONTS
-    for name in target_fonts :
-        p =ASSETS_DIR /name
-        if p .exists ():
-            try :
-                if 'Emoji'in name or name .endswith ('.otf'):
-                    continue
-                file_style =classify_font_style (name )
-                if file_style !=style :
-                    continue
-                return ImageFont .truetype (str (p ),size ,index =0 )
-            except :
-                if name .endswith ('.ttc'):
-                    for idx in range (8 ):
-                        try :
-                            return ImageFont .truetype (str (p ),size ,index =idx )
-                        except :
-                            continue
+    # Для views и латиницы пытаться грузить несколько вариантов
+    preferred_fonts = [
+        "NotoSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSansCyrillic-Regular.ttf",
+        "NotoSansArmenian-Regular.ttf",
+        "DejaVuSans.ttf"
+    ]
+    for name in preferred_fonts:
+        p = ASSETS_DIR / name
+        if p.exists():
+            try:
+                font = ImageFont.truetype(str(p), size, index=0)
+                print(f"[Thumb Debug] Используется шрифт для views: {name}")
+                return font
+            except Exception as e:
+                print(f"[Thumb Debug] Не удалось загрузить {name}: {e}")
                 continue
-    return ImageFont .load_default (size =size )
+    # Если не найдено — пробуем любой NotoSans*.ttf
+    for file in ASSETS_DIR.glob("NotoSans*.ttf"):
+        try:
+            font = ImageFont.truetype(str(file), size, index=0)
+            print(f"[Thumb Debug] Используется fallback-шрифт для views: {file.name}")
+            return font
+        except Exception as e:
+            print(f"[Thumb Debug] Не удалось загрузить fallback {file.name}: {e}")
+            continue
+    print("[Thumb Debug] Используется стандартный PIL-шрифт для views")
+    return ImageFont.load_default(size=size)
 W ,H =(1320 ,760 )
 BG_BLUR =22
 CIRCLE_SIZE =560
@@ -209,25 +229,55 @@ def has_glyph (font ,char ):
     return bbox is not None and bbox [2 ]>0 and (bbox [3 ]>0 )
 
 def draw_text_with_shadow_multi (draw ,xy ,text ,style ='regular',fill =WHITE ,stroke =4 ):
-    fonts =FONTS .get (style ,FONTS ['regular'])
+    fonts = FONTS.get(style, FONTS['regular'])
     all_fonts = fonts + [ImageFont.truetype(str(ASSETS_DIR / name), 52, index=0) for name in ALL_FONTS if (ASSETS_DIR / name).exists()]
-    x ,y =xy
-    for dx in [-stroke ,0 ,stroke ]:
-        for dy in [-stroke ,0 ,stroke ]:
-            if dx or dy :
-                cx =x +dx
-                for char in text :
-                    font = next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
+    # Явный армянский шрифт
+    arm_font = None
+    arm_font_path = ASSETS_DIR / "NotoSansArmenian-Regular.ttf"
+    if arm_font_path.exists():
+        try:
+            arm_font = ImageFont.truetype(str(arm_font_path), 52, index=0)
+        except Exception:
+            arm_font = None
+    def pick_font(char):
+        code = ord(char)
+        if 1328 <= code <= 1423 and arm_font:
+            return arm_font
+        latin_font_path = ASSETS_DIR / ("NotoSans-Bold.ttf" if style == "bold" else "NotoSans-Regular.ttf")
+        if latin_font_path.exists():
+            try:
+                latin_font = ImageFont.truetype(str(latin_font_path), 52, index=0)
+                return latin_font
+            except Exception as e:
+                logging.error(f'Font load error for {char} (ord={code}): {e}')
+        font = next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
+        return font
+    import unicodedata
+    # Автоочистка строки от невидимых символов и замена математических латинских символов
+    def clean_invisible(s):
+        return ''.join(c for c in unicodedata.normalize('NFC', s) if unicodedata.category(c)[0] != 'C')
+    # Заменить математические латинские символы на обычные
+    text = convert_italic_unicode(text)
+    # Заменить fancy-армянские символы на обычные
+    text = convert_fancy_armenian(text)
+    text = clean_invisible(text)
+    x, y = xy
+    for dx in [-stroke, 0, stroke]:
+        for dy in [-stroke, 0, stroke]:
+            if dx or dy:
+                cx = x + dx
+                for char in text:
+                    font = pick_font(char)
                     draw.text((cx, y+dy), char, fill=STROKE_COLOR, font=font)
                     cx += font.getlength(char)
-    cx =x +2
-    for char in text :
-        font = next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
+    cx = x + 2
+    for char in text:
+        font = pick_font(char)
         draw.text((cx, y+2), char, fill=TEXT_SHADOW, font=font)
         cx += font.getlength(char)
-    cx =x
-    for char in text :
-        font = next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
+    cx = x
+    for char in text:
+        font = pick_font(char)
         draw.text((cx, y), char, fill=fill, font=font)
         cx += font.getlength(char)
 
@@ -276,11 +326,22 @@ def split_text_multi (text ,style ='regular',max_w =0 ,max_lines =4 ):
     return lines [:max_lines ]
 
 def get_text_width_multi (text ,style ='regular'):
-    fonts =FONTS .get (style ,FONTS ['regular'])
+    fonts = FONTS.get(style, FONTS['regular'])
     all_fonts = fonts + [ImageFont.truetype(str(ASSETS_DIR / name), 52, index=0) for name in ALL_FONTS if (ASSETS_DIR / name).exists()]
+    arm_font = None
+    arm_font_path = ASSETS_DIR / "NotoSansArmenian-Regular.ttf"
+    if arm_font_path.exists():
+        try:
+            arm_font = ImageFont.truetype(str(arm_font_path), 52, index=0)
+        except Exception:
+            arm_font = None
+    def pick_font(char):
+        if 1328 <= ord(char) <= 1423 and arm_font:
+            return arm_font
+        return next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
     width = 0
     for char in text:
-        font = next((f for f in all_fonts if has_glyph(f, char)), fonts[-1])
+        font = pick_font(char)
         width += font.getlength(char)
     return width
 import asyncio
@@ -318,6 +379,7 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
                     with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
                         info = ydl.extract_info(f'https://youtu.be/{videoid}', download=False)
                 except Exception as ydl_error:
+                    logging.error(f'yt-dlp не смог получить info: {ydl_error}')
                     thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
                 else:
                     if info:
@@ -334,7 +396,8 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
                         thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
             else:
                 thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
-        except Exception:
+        except Exception as e:
+            logging.error(f'Ошибка при формировании thumb_url: {e}')
             thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
 
         # Fallback chain for YouTube thumbnails
@@ -352,30 +415,40 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
 
     img_data = None
     used_url = None
+    logging.info(f'Запуск скачивания thumbnail для videoid={videoid}')
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as s:
         for url in thumb_candidates:
             try:
+                print(f'[Thumb Debug] Пытаюсь скачать: {url}')
                 async with s.get(url) as r:
+                    print(f'[Thumb Debug] Ответ HTTP: {r.status} для {url}')
                     if r.status == 200:
                         img_data = await r.read()
                         used_url = url
+                        print(f'[Thumb Debug] Успешно скачан thumbnail: {url}, размер={len(img_data)} байт')
                         break
                     else:
                         print(f'[Thumb Error] Failed to download thumbnail from {url}: HTTP {r.status}')
             except Exception as e:
                 print(f'[Thumb Error] Exception for {url}: {e}')
     if not img_data:
+        print(f'[Thumb Debug] Не удалось получить img_data для videoid={videoid}, возвращаю DEFAULT_THUMB')
         return config.DEFAULT_THUMB
 
     try:
         if title is None:
+            print(f'[Thumb Debug] title is None для videoid={videoid}')
             title = 'Unknown Song'
         if view_count is None:
+            print(f'[Thumb Debug] view_count is None для videoid={videoid}')
             view_count = 0
         if channel_name is None:
+            print(f'[Thumb Debug] channel_name is None для videoid={videoid}')
             channel_name = 'Unknown'
         if duration is None:
+            print(f'[Thumb Debug] duration is None для videoid={videoid}')
             duration = '0:00'
+        print(f'[Thumb Debug] Перед генерацией: title={title}, views={view_count}, channel_name={channel_name}, duration={duration}')
 
         from io import BytesIO
         tmp = BytesIO(img_data)
@@ -423,7 +496,8 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
         except:
             views = 0
         views_text = f'{format_views_count(views)} views'
-        views_font = load_font_with_fallback(32, style='regular')
+        # Для views всегда использовать надёжный шрифт
+        views_font = load_font_with_fallback(32)
         v_w = views_font.getlength(views_text)
         v_x = info_x + (max_w - v_w) // 2
         v_y = t_y + total_h + 8
@@ -445,6 +519,7 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
     except Exception as e:
         print(f'[Thumb Error] {e}')
         traceback.print_exc()
+        print(f'[Thumb Debug] Ошибка генерации обложки для videoid={videoid}, возвращаю DEFAULT_THUMB')
         return config.DEFAULT_THUMB
 
 class Thumbnail :
