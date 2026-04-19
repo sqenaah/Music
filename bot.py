@@ -100,7 +100,7 @@ PING_IMG_URL = getenv(
     "PING_IMG_URL",
     "https://image2url.com/r2/default/images/1768792821746-ad62ab76-1fdc-45d7-8b5e-a5343577d6bb.jpg"
 )
-API_TOKEN = os.getenv("API_TOKEN", "8649386801:AAF4mCCcCPJR_LWNUGINj1qx8vRInC7of7g")
+API_TOKEN = os.getenv("API_TOKEN", "8275714086:AAFsZnOE2e2oXtykXtM5Xfewy8rwuUNMPy8")
 API_ID = int(os.getenv("API_ID", "27638882"))
 API_HASH = os.getenv("API_HASH", "f745cdd5ddb46cf841d6990048f52935")
 TELETHON_STRING_SESSION = os.getenv(
