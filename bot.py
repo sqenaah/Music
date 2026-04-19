@@ -1,3 +1,4 @@
+from __future__ import annotations
 from ffmpeg_seek import ffmpeg_cut
 # === Команда /seek и /seekback ===
 @dp.message_handler(Command("seek"))
