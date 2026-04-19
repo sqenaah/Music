@@ -307,43 +307,48 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
     view_count = getattr(song_data, "views", None) if song_data else None
     channel_name = getattr(song_data, "channel", None) if song_data else None
     duration = getattr(song_data, "duration", None) if song_data else None
-    try:
-        if title is None or view_count is None:
-            try:
-                with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                    info = ydl.extract_info(f'https://youtu.be/{videoid}', download=False)
-            except Exception as ydl_error:
-                thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
-            else:
-                if info:
-                    if title is None:
-                        title = info.get('title', 'Unknown Song')
-                    if view_count is None:
-                        view_count = info.get('view_count', 0)
-                    thumb_url = info.get('thumbnail', '')
-                    if channel_name is None:
-                        channel_name = info.get('uploader', 'Unknown')
-                    if duration is None:
-                        duration = info.get('duration_string', '0:00')
-                else:
+    # Если song_data содержит thumbnail, используем только его
+    if song_data and getattr(song_data, "thumbnail", None):
+        thumb_url = song_data.thumbnail
+        thumb_candidates = [thumb_url]
+    else:
+        try:
+            if title is None or view_count is None:
+                try:
+                    with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                        info = ydl.extract_info(f'https://youtu.be/{videoid}', download=False)
+                except Exception as ydl_error:
                     thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
-        else:
+                else:
+                    if info:
+                        if title is None:
+                            title = info.get('title', 'Unknown Song')
+                        if view_count is None:
+                            view_count = info.get('view_count', 0)
+                        thumb_url = info.get('thumbnail', '')
+                        if channel_name is None:
+                            channel_name = info.get('uploader', 'Unknown')
+                        if duration is None:
+                            duration = info.get('duration_string', '0:00')
+                    else:
+                        thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
+            else:
+                thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
+        except Exception:
             thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
-    except Exception:
-        thumb_url = f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg'
 
-    # Fallback chain for YouTube thumbnails
-    thumb_candidates = []
-    if thumb_url:
-        thumb_candidates.append(thumb_url)
-    # Always try these as fallback
-    thumb_candidates.extend([
-        f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg',
-        f'https://i.ytimg.com/vi/{videoid}/hqdefault.jpg',
-        f'https://i.ytimg.com/vi/{videoid}/sddefault.jpg',
-        f'https://i.ytimg.com/vi/{videoid}/mqdefault.jpg',
-        f'https://i.ytimg.com/vi/{videoid}/default.jpg',
-    ])
+        # Fallback chain for YouTube thumbnails
+        thumb_candidates = []
+        if thumb_url:
+            thumb_candidates.append(thumb_url)
+        # Always try these as fallback
+        thumb_candidates.extend([
+            f'https://i.ytimg.com/vi/{videoid}/maxresdefault.jpg',
+            f'https://i.ytimg.com/vi/{videoid}/hqdefault.jpg',
+            f'https://i.ytimg.com/vi/{videoid}/sddefault.jpg',
+            f'https://i.ytimg.com/vi/{videoid}/mqdefault.jpg',
+            f'https://i.ytimg.com/vi/{videoid}/default.jpg',
+        ])
 
     img_data = None
     used_url = None
@@ -445,9 +450,14 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
 class Thumbnail :
 
     async def generate(self, song, size=None):
-        # Inject song data for get_thumb
-        get_thumb._song_data = song
+        # Пробрасываем все поля song в song_data
+        class SongData:
+            pass
+        s = SongData()
+        for attr in ["id", "title", "views", "channel", "uploader", "duration", "thumbnail"]:
+            setattr(s, attr, getattr(song, attr, None))
+        get_thumb._song_data = s
         try:
-            return await get_thumb(song.id)
+            return await get_thumb(s.id)
         finally:
             get_thumb._song_data = None

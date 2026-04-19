@@ -822,7 +822,7 @@ async def start_playback_locked(
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
 
@@ -853,7 +853,7 @@ async def start_playback_locked(
                         InlineKeyboardButton(text="▷▷", callback_data="skip"),
                         InlineKeyboardButton(text="▢", callback_data="end"),
                     ],
-                    [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'username') else 'muzza_test_bot'))],
+                    [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
                     [InlineKeyboardButton(text="close", callback_data="close")],
                 ])
                 try:
@@ -901,7 +901,7 @@ async def progress_callback(query: CallbackQuery, state=None):
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
     try:
@@ -973,7 +973,7 @@ async def restart_callback(query: CallbackQuery):
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
     try:
@@ -1243,14 +1243,16 @@ async def ping_cmd(message: types.Message):
             active_playbacks += 1
 
 
-    # Размер кеша (GridFS)
+
+    # Размер кеша (GridFS) — сумма всех файлов
     if mongo_cache is None:
         raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
-    # Получаем имя коллекции файлов GridFS корректно
     bucket_name = mongo_cache.fs._bucket_name if hasattr(mongo_cache.fs, '_bucket_name') else 'cache'
-    files_collection = f"{bucket_name}.files"
-    cache_stats = await mongo_cache.db.command({"collStats": files_collection})
-    cache_size_mb = cache_stats.get("size", 0) / (1024 * 1024)
+    files_collection = mongo_cache.db[f"{bucket_name}.files"]
+    total_size = 0
+    async for doc in files_collection.find({}, {"length": 1}):
+        total_size += doc.get("length", 0)
+    cache_size_mb = total_size / (1024 * 1024)
 
     text = (
         f"<b>Бот работает:</b> {hours}ч {minutes}м {seconds}с\n"
@@ -1274,6 +1276,28 @@ async def play_cmd(message: types.Message, command: CommandObject):
 
     try:
         item = await resolve_track_request(message, command, force_video=False)
+        # Если это YouTube URL, получаем info через yt-dlp
+        info = None
+        if looks_like_url(item.get("original_query", "")):
+            def worker():
+                with YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+                    return ydl.extract_info(item["original_query"], download=False)
+            info = await asyncio.to_thread(worker)
+            # Обновляем item
+            if info:
+                item["title"] = info.get("title")
+                item["uploader"] = info.get("uploader")
+                item["duration"] = info.get("duration")
+                item["thumbnail"] = info.get("thumbnail")
+                item["views"] = info.get("view_count")
+        # Передаём все поля item в Thumbnail.generate
+        if item.get("id"):
+            try:
+                thumb_path = await Thumbnail().generate(type("Song", (), item)())
+            except Exception:
+                thumb_path = None
+            if thumb_path and os.path.exists(thumb_path):
+                item["thumb_path"] = thumb_path
         status, position = await enqueue_or_start(message.chat.id, item)
     except ValueError as exc:
         from config import DEFAULT_THUMB
@@ -1307,6 +1331,28 @@ async def vplay_cmd(message: types.Message, command: CommandObject):
 
     try:
         item = await resolve_track_request(message, command, force_video=True)
+        # Если это YouTube URL, получаем info через yt-dlp
+        info = None
+        if looks_like_url(item.get("original_query", "")):
+            def worker():
+                with YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+                    return ydl.extract_info(item["original_query"], download=False)
+            info = await asyncio.to_thread(worker)
+            # Обновляем item
+            if info:
+                item["title"] = info.get("title")
+                item["uploader"] = info.get("uploader")
+                item["duration"] = info.get("duration")
+                item["thumbnail"] = info.get("thumbnail")
+                item["views"] = info.get("view_count")
+        # Передаём все поля item в Thumbnail.generate
+        if item.get("id"):
+            try:
+                thumb_path = await Thumbnail().generate(type("Song", (), item)())
+            except Exception:
+                thumb_path = None
+            if thumb_path and os.path.exists(thumb_path):
+                item["thumb_path"] = thumb_path
         status, position = await enqueue_or_start(message.chat.id, item)
     except ValueError as exc:
         from config import DEFAULT_THUMB
