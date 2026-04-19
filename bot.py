@@ -1,95 +1,4 @@
-from __future__ import annotations
 from ffmpeg_seek import ffmpeg_cut
-# === Команда /seek и /seekback ===
-@dp.message_handler(Command("seek"))
-async def seek_cmd(message: types.Message, command: CommandObject):
-    seconds = 0
-    try:
-        seconds = int(command_args(command))
-    except Exception:
-        await message.reply("<b>Пример: /seek 120</b>")
-        return
-    if seconds <= 0:
-        await message.reply("<b>Укажите положительное число секунд.</b>")
-        return
-    chat_id = message.chat.id
-    runtime = get_runtime(chat_id)
-    async with runtime.lock:
-        state = await get_state(chat_id)
-        current = state.get("current")
-        if not current:
-            await message.reply("<b>Сейчас ничего не играет.</b>")
-            return
-        # Получаем исходный аудиофайл из кеша
-        cache_key = f"song:{current.get('original_query', '').strip().lower()}"
-        cached = await mongo_cache.get_file(cache_key)
-        if not cached:
-            await message.reply("<b>Исходный файл не найден в кеше.</b>")
-            return
-        data, meta = cached
-        # Обрезаем через ffmpeg
-        new_data = ffmpeg_cut(data, seconds)
-        if not new_data:
-            await message.reply("<b>Ошибка ffmpeg при перемотке.</b>")
-            return
-        # Сохраняем новый файл во временный кеш
-        seek_key = f"seek:{cache_key}:{seconds}"
-        await mongo_cache.save_file(seek_key, new_data, {"seek": seconds, "original": cache_key})
-        # Обновляем state и перезапускаем поток
-        current["seek_offset"] = seconds
-        state["current"] = current
-        await set_state(chat_id, state)
-        await leave_voice_chat(chat_id)
-        # Запускаем воспроизведение с seek
-        await start_playback_locked(chat_id, state, runtime, current)
-        await message.reply(f"<b>Перемотка вперёд на {seconds} секунд.</b>")
-
-@dp.message_handler(Command("seekback"))
-async def seekback_cmd(message: types.Message, command: CommandObject):
-    seconds = 0
-    try:
-        seconds = int(command_args(command))
-    except Exception:
-        await message.reply("<b>Пример: /seekback 10</b>")
-        return
-    if seconds <= 0:
-        await message.reply("<b>Укажите положительное число секунд.</b>")
-        return
-    chat_id = message.chat.id
-    runtime = get_runtime(chat_id)
-    async with runtime.lock:
-        state = await get_state(chat_id)
-        current = state.get("current")
-        if not current:
-            await message.reply("<b>Сейчас ничего не играет.</b>")
-            return
-        # Получаем текущий offset
-        cur_offset = current.get("seek_offset", 0)
-        new_offset = max(0, cur_offset - seconds)
-        # Получаем исходный аудиофайл из кеша
-        cache_key = f"song:{current.get('original_query', '').strip().lower()}"
-        cached = await mongo_cache.get_file(cache_key)
-        if not cached:
-            await message.reply("<b>Исходный файл не найден в кеше.</b>")
-            return
-        data, meta = cached
-        # Обрезаем через ffmpeg
-        new_data = ffmpeg_cut(data, new_offset)
-        if not new_data:
-            await message.reply("<b>Ошибка ffmpeg при перемотке.</b>")
-            return
-        # Сохраняем новый файл во временный кеш
-        seek_key = f"seek:{cache_key}:{new_offset}"
-        await mongo_cache.save_file(seek_key, new_data, {"seek": new_offset, "original": cache_key})
-        # Обновляем state и перезапускаем поток
-        current["seek_offset"] = new_offset
-        state["current"] = current
-        await set_state(chat_id, state)
-        await leave_voice_chat(chat_id)
-        # Запускаем воспроизведение с seek
-        await start_playback_locked(chat_id, state, runtime, current)
-        await message.reply(f"<b>Перемотка назад на {seconds} секунд.</b>")
-from __future__ import annotations
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from thumbnails import Thumbnail
 import re
@@ -132,7 +41,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 # --- MongoDB Cache ---
-from mongo_cache_migration.mongo_cache import MongoCache
+from mongo_cache_migration.mongo_cache_migration.mongo_cache import MongoCache
 
 
 def getenv(key, default=None):
@@ -177,16 +86,13 @@ STREAM_END_DEBOUNCE_SECONDS = 0.75
 MONGO_CONNECT_TIMEOUT_MS = 5000
 
 # --- Инициализация MongoCache ---
+
+# --- Только MongoDB, без локального кэша и путей ---
 MONGO_URL = os.getenv(
     "MONGO_URL",
     "mongodb+srv://sarkis05082008_db_user:JhF9FZ4OllNEpWVz@cluster0.mo7yftz.mongodb.net/?appName=Cluster0",
 )
-mongo_cache = MongoCache(MONGO_URL, db_name="muzza", bucket_name="cache")
-
-import asyncio
-async def _setup_mongo_cache():
-    await mongo_cache.setup_ttl_index(expire_seconds=86400)
-asyncio.get_event_loop().run_until_complete(_setup_mongo_cache())
+mongo_cache: MongoCache | None = None
 
 AUDIO_EXTENSIONS = {
     ".aac",
@@ -748,6 +654,8 @@ def detect_message_media(message: types.Message) -> dict[str, Any] | None:
 async def download_telegram_media(media_info: dict[str, Any]) -> Path:
     extension = media_info.get("extension") or (".mp4" if media_info["kind"] == "video" else ".mp3")
     cache_key = f"tgmedia:{media_info['file_id']}:{extension}"
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
     cached = await mongo_cache.get_file(cache_key)
     if cached:
         data, meta = cached
@@ -757,6 +665,8 @@ async def download_telegram_media(media_info: dict[str, Any]) -> Path:
     buf = BytesIO()
     await bot.download(media_info["file"], destination=buf, timeout=MEDIA_DOWNLOAD_TIMEOUT)
     data = buf.getvalue()
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
     await mongo_cache.save_file(cache_key, data, {"media_info": media_info})
     return data
 
@@ -804,8 +714,12 @@ async def resolve_track_request(
     query = command_args(command)
     if not query:
         if force_video:
-            raise ValueError("Использование: /vplay <ссылка или название> или reply на видео.")
-        raise ValueError("Использование: /play <ссылка или название> или reply на аудио/видео.")
+            raise ValueError(
+                "Использование команды:\n/vplay [ссылка или название]\nили reply на видео."
+            )
+        raise ValueError(
+            "Использование команды:\n/play [ссылка или название]\nили reply на аудио или видео."
+        )
 
     return await build_query_track(query, force_video, message)
 
@@ -821,6 +735,9 @@ async def start_playback_locked(
     runtime: ChatRuntime,
     item: dict[str, Any],
 ) -> dict[str, Any]:
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+
     stream = build_stream(item)
     await voice_client.play(chat_id, stream=stream, config=GroupCallConfig(auto_start=True))
     state["current"] = item
@@ -1192,6 +1109,8 @@ async def handle_end(chat_id: int) -> None:
 async def download_song(query: str) -> tuple[Path, dict[str, Any]]:
     # Ключ кеша — строка запроса
     cache_key = f"song:{query.strip().lower()}"
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
     cached = await mongo_cache.get_file(cache_key)
     if cached:
         data, meta = cached
@@ -1237,6 +1156,8 @@ async def download_song(query: str) -> tuple[Path, dict[str, Any]]:
             return data, info
 
     data, info = await asyncio.to_thread(worker)
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
     await mongo_cache.save_file(cache_key, data, {"info": info})
     return data, info
 
@@ -1321,8 +1242,14 @@ async def ping_cmd(message: types.Message):
         if state.get("current"):
             active_playbacks += 1
 
+
     # Размер кеша (GridFS)
-    cache_stats = await mongo_cache.db.command({"collStats": mongo_cache.fs._GridFSBucket__files.name})
+    if mongo_cache is None:
+        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+    # Получаем имя коллекции файлов GridFS корректно
+    bucket_name = mongo_cache.fs._bucket_name if hasattr(mongo_cache.fs, '_bucket_name') else 'cache'
+    files_collection = f"{bucket_name}.files"
+    cache_stats = await mongo_cache.db.command({"collStats": files_collection})
     cache_size_mb = cache_stats.get("size", 0) / (1024 * 1024)
 
     text = (
@@ -1634,9 +1561,7 @@ async def shutdown():
         await bot.session.close()
     with suppress(Exception):
         await queue_storage.close()
-    if instance_lock is not None:
-        with suppress(Exception):
-            instance_lock.release()
+    # instance_lock больше не используется
 
 
 async def prepare_environment():
@@ -1646,18 +1571,116 @@ async def prepare_environment():
     await queue_storage.reset_all()
     await register_bot_commands()
 
+async def seek_cmd(message: types.Message, command: CommandObject):
+    seconds = 0
+    try:
+        seconds = int(command_args(command))
+    except Exception:
+        await message.reply("<b>Пример: /seek 120</b>")
+        return
+    if seconds <= 0:
+        await message.reply("<b>Укажите положительное число секунд.</b>")
+        return
+    chat_id = message.chat.id
+    runtime = get_runtime(chat_id)
+    async with runtime.lock:
+        state = await get_state(chat_id)
+        current = state.get("current")
+        if not current:
+            await message.reply("<b>Сейчас ничего не играет.</b>")
+            return
+        # Получаем исходный аудиофайл из кеша
+        cache_key = f"song:{current.get('original_query', '').strip().lower()}"
+        if mongo_cache is None:
+            raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+        cached = await mongo_cache.get_file(cache_key)
+        if not cached:
+            await message.reply("<b>Исходный файл не найден в кеше.</b>")
+            return
+        data, meta = cached
+        # Обрезаем через ffmpeg
+        new_data = ffmpeg_cut(data, seconds)
+        if not new_data:
+            await message.reply("<b>Ошибка ffmpeg при перемотке.</b>")
+            return
+        # Сохраняем новый файл во временный кеш
+        seek_key = f"seek:{cache_key}:{seconds}"
+        if mongo_cache is None:
+            raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+        await mongo_cache.save_file(seek_key, new_data, {"seek": seconds, "original": cache_key})
+        # Обновляем state и перезапускаем поток
+        current["seek_offset"] = seconds
+        state["current"] = current
+        await set_state(chat_id, state)
+        await leave_voice_chat(chat_id)
+        # Запускаем воспроизведение с seek
+        await start_playback_locked(chat_id, state, runtime, current)
+        await message.reply(f"<b>Перемотка вперёд на {seconds} секунд.</b>")
 
+async def seekback_cmd(message: types.Message, command: CommandObject):
+    seconds = 0
+    try:
+        seconds = int(command_args(command))
+    except Exception:
+        await message.reply("<b>Пример: /seekback 10</b>")
+        return
+    if seconds <= 0:
+        await message.reply("<b>Укажите положительное число секунд.</b>")
+        return
+    chat_id = message.chat.id
+    runtime = get_runtime(chat_id)
+    async with runtime.lock:
+        state = await get_state(chat_id)
+        current = state.get("current")
+        if not current:
+            await message.reply("<b>Сейчас ничего не играет.</b>")
+            return
+        # Получаем текущий offset
+        cur_offset = current.get("seek_offset", 0)
+        new_offset = max(0, cur_offset - seconds)
+        # Получаем исходный аудиофайл из кеша
+        cache_key = f"song:{current.get('original_query', '').strip().lower()}"
+        if mongo_cache is None:
+            raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+        cached = await mongo_cache.get_file(cache_key)
+        if not cached:
+            await message.reply("<b>Исходный файл не найден в кеше.</b>")
+            return
+        data, meta = cached
+        # Обрезаем через ffmpeg
+        new_data = ffmpeg_cut(data, new_offset)
+        if not new_data:
+            await message.reply("<b>Ошибка ffmpeg при перемотке.</b>")
+            return
+        # Сохраняем новый файл во временный кеш
+        seek_key = f"seek:{cache_key}:{new_offset}"
+        if mongo_cache is None:
+            raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+        await mongo_cache.save_file(seek_key, new_data, {"seek": new_offset, "original": cache_key})
+        # Обновляем state и перезапускаем поток
+        current["seek_offset"] = new_offset
+        state["current"] = current
+        await set_state(chat_id, state)
+        await leave_voice_chat(chat_id)
+        # Запускаем воспроизведение с seek
+        await start_playback_locked(chat_id, state, runtime, current)
+        await message.reply(f"<b>Перемотка назад на {seconds} секунд.</b>")
 
 
 
 async def main():
-    global bot, dp, userbot, voice_client
+
+    global bot, dp, userbot, voice_client, mongo_cache
 
     # Инициализация асинхронных клиентов внутри event loop
     from aiogram import Bot, Dispatcher
     from aiogram.client.bot import DefaultBotProperties
     from telethon import TelegramClient
     from pytgcalls import PyTgCalls
+
+
+    # --- Инициализация MongoCache ---
+    mongo_cache = MongoCache(MONGO_URL)
 
     bot = Bot(
         token=API_TOKEN,
@@ -1717,10 +1740,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    instance_lock = acquire_single_instance_lock()
-    try:
-        asyncio.run(main())
-    finally:
-        if instance_lock is not None:
-            with suppress(Exception):
-                instance_lock.release()
+    import asyncio
+    asyncio.run(main())

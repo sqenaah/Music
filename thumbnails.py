@@ -119,8 +119,6 @@ def load_font_with_fallback (size ,style ='regular'):
                             continue
                 continue
     return ImageFont .load_default (size =size )
-CACHE_DIR =Path ('cache')
-CACHE_DIR .mkdir (exist_ok =True )
 W ,H =(1320 ,760 )
 BG_BLUR =22
 CIRCLE_SIZE =560
@@ -298,9 +296,7 @@ def format_views_count (views :int )->str :
         return str (views )
 
 async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
-    cache_file = CACHE_DIR / f'{videoid}_thumb.jpg'
-    if cache_file.exists():
-        return str(cache_file)
+    # Удалено: локальный кеш и CACHE_DIR. Всё хранится только в MongoDB.
 
     # song_data will be injected via Thumbnail.generate
     song_data = getattr(get_thumb, "_song_data", None)
@@ -376,74 +372,75 @@ async def get_thumb (videoid :str ,queue_pos :int =1 ,title_style :str ='bold'):
         if duration is None:
             duration = '0:00'
 
-        tmp = CACHE_DIR / f't_{videoid}.jpg'
-        tmp.write_bytes(img_data)
+        from io import BytesIO
+        tmp = BytesIO(img_data)
         art = Image.open(tmp).convert('RGBA')
         dom = dominant_color(art)
         bg_art = resize_fit(art, W, H).filter(ImageFilter.GaussianBlur(BG_BLUR))
         bg_art = ImageEnhance.Brightness(bg_art).enhance(0.88)
         bg_art = ImageEnhance.Contrast(bg_art).enhance(1.05)
-        canvas =Image .new ('RGBA',(W ,H ),(0 ,0 ,0 ,0 ))
-        draw =ImageDraw .Draw (canvas )
-        gradient_bg (draw ,W ,H ,dom )
-        canvas .paste (bg_art .convert ('RGB'),(0 ,0 ),bg_art .split ()[3 ]if bg_art .mode =='RGBA'else None )
-        x ,y =(80 ,(H -CIRCLE_SIZE )//2 )
-        r =max (CIRCLE_SIZE /art .width ,CIRCLE_SIZE /art .height )
-        circle_w =int (art .width *r )
-        circle_h =int (art .height *r )
-        circle =art .resize ((circle_w ,circle_h ),Image .LANCZOS )
-        mask =Image .new ('L',(CIRCLE_SIZE ,CIRCLE_SIZE ),0 )
-        mdraw =ImageDraw .Draw (mask )
-        mdraw .ellipse ((0 ,0 ,CIRCLE_SIZE ,CIRCLE_SIZE ),fill =255 )
-        circle .putalpha (mask .resize ((circle_w ,circle_h ),Image .LANCZOS ))
-        circle_canvas =Image .new ('RGBA',(CIRCLE_SIZE ,CIRCLE_SIZE ),(0 ,0 ,0 ,0 ))
-        circle_canvas .paste (circle ,((CIRCLE_SIZE -circle_w )//2 ,(CIRCLE_SIZE -circle_h )//2 ))
-        circle_canvas .putalpha (mask )
-        shadow =Image .new ('RGBA',(CIRCLE_SIZE +100 ,CIRCLE_SIZE +100 ),(0 ,0 ,0 ,0 ))
-        sdraw =ImageDraw .Draw (shadow )
-        sdraw .ellipse ((50 ,50 ,CIRCLE_SIZE +50 ,CIRCLE_SIZE +50 ),fill =SHADOW )
-        shadow =shadow .filter (ImageFilter .GaussianBlur (35 ))
-        canvas .paste (shadow ,(x -50 ,y -50 ),shadow )
-        canvas .paste (circle_canvas ,(x ,y ),circle_canvas )
-        info_x =x +CIRCLE_SIZE +80
-        max_w =W -info_x -70
+        canvas = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+        gradient_bg(draw, W, H, dom)
+        canvas.paste(bg_art.convert('RGB'), (0, 0), bg_art.split()[3] if bg_art.mode == 'RGBA' else None)
+        x, y = (80, (H - CIRCLE_SIZE) // 2)
+        r = max(CIRCLE_SIZE / art.width, CIRCLE_SIZE / art.height)
+        circle_w = int(art.width * r)
+        circle_h = int(art.height * r)
+        circle = art.resize((circle_w, circle_h), Image.LANCZOS)
+        mask = Image.new('L', (CIRCLE_SIZE, CIRCLE_SIZE), 0)
+        mdraw = ImageDraw.Draw(mask)
+        mdraw.ellipse((0, 0, CIRCLE_SIZE, CIRCLE_SIZE), fill=255)
+        circle.putalpha(mask.resize((circle_w, circle_h), Image.LANCZOS))
+        circle_canvas = Image.new('RGBA', (CIRCLE_SIZE, CIRCLE_SIZE), (0, 0, 0, 0))
+        circle_canvas.paste(circle, ((CIRCLE_SIZE - circle_w) // 2, (CIRCLE_SIZE - circle_h) // 2))
+        circle_canvas.putalpha(mask)
+        shadow = Image.new('RGBA', (CIRCLE_SIZE + 100, CIRCLE_SIZE + 100), (0, 0, 0, 0))
+        sdraw = ImageDraw.Draw(shadow)
+        sdraw.ellipse((50, 50, CIRCLE_SIZE + 50, CIRCLE_SIZE + 50), fill=SHADOW)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(35))
+        canvas.paste(shadow, (x - 50, y - 50), shadow)
+        canvas.paste(circle_canvas, (x, y), circle_canvas)
+        info_x = x + CIRCLE_SIZE + 80
+        max_w = W - info_x - 70
 
-        clean_title =remove_emojis (title )
-        title_lines =split_text_multi (clean_title ,style =title_style ,max_w =max_w ,max_lines =4 )
-        line_height =58
-        total_h =len (title_lines )*line_height
-        t_y =y +(CIRCLE_SIZE -total_h )//2 +8
-        for i ,line in enumerate (title_lines ):
-            line_w =get_text_width_multi (line ,style =title_style )
-            tx =info_x +(max_w -line_w )//2
-            draw_text_with_shadow_multi (draw ,(tx ,t_y +i *line_height ),line ,style =title_style ,stroke =4 )
-        try :
-            views =int (view_count or 0 )
-        except :
-            views =0
-        views_text =f'{format_views_count (views )} views'
-        views_font =load_font_with_fallback (32 ,style ='regular')
-        v_w =views_font .getlength (views_text )
-        v_x =info_x +(max_w -v_w )//2
-        v_y =t_y +total_h +8
-        draw_text_shadow (draw ,(v_x ,v_y ),views_text ,views_font ,fill =(230 ,230 ,230 ,230 ),stroke =2 )
-        water ='Moon Music'
-        water_font =load_font_with_fallback (28 ,style ='italic')
-        w_w =water_font .getlength (water )
-        wx =W -w_w -30
-        wy =10
-        draw_text_shadow (draw ,(wx ,wy ),water ,water_font ,fill =(210 ,210 ,210 ,190 ),stroke =2 )
-        canvas =canvas .convert ('RGB')
-        canvas .save (cache_file ,'JPEG',quality =99 ,optimize =True ,subsampling =0 )
-        try :
-            os .remove (tmp )
-        except :
-            pass
-        return str (cache_file )
-    except Exception as e :
-        print (f'[Thumb Error] {e }')
-        traceback .print_exc ()
-        return config .DEFAULT_THUMB
+        clean_title = remove_emojis(title)
+        title_lines = split_text_multi(clean_title, style=title_style, max_w=max_w, max_lines=4)
+        line_height = 58
+        total_h = len(title_lines) * line_height
+        t_y = y + (CIRCLE_SIZE - total_h) // 2 + 8
+        for i, line in enumerate(title_lines):
+            line_w = get_text_width_multi(line, style=title_style)
+            tx = info_x + (max_w - line_w) // 2
+            draw_text_with_shadow_multi(draw, (tx, t_y + i * line_height), line, style=title_style, stroke=4)
+        try:
+            views = int(view_count or 0)
+        except:
+            views = 0
+        views_text = f'{format_views_count(views)} views'
+        views_font = load_font_with_fallback(32, style='regular')
+        v_w = views_font.getlength(views_text)
+        v_x = info_x + (max_w - v_w) // 2
+        v_y = t_y + total_h + 8
+        draw_text_shadow(draw, (v_x, v_y), views_text, views_font, fill=(230, 230, 230, 230), stroke=2)
+        water = 'Moon Music'
+        water_font = load_font_with_fallback(28, style='italic')
+        w_w = water_font.getlength(water)
+        wx = W - w_w - 30
+        wy = 10
+        draw_text_shadow(draw, (wx, wy), water, water_font, fill=(210, 210, 210, 190), stroke=2)
+        canvas = canvas.convert('RGB')
+        out_bytes = BytesIO()
+        canvas.save(out_bytes, 'JPEG', quality=99, optimize=True, subsampling=0)
+        out_bytes.seek(0)
+        # Сохраняем в mongo_cache с TTL
+        if hasattr(get_thumb, 'mongo_cache') and get_thumb.mongo_cache is not None:
+            await get_thumb.mongo_cache.save_file(f"thumb:{videoid}", out_bytes.getvalue(), {"video_id": videoid, "createdAt": __import__('datetime').datetime.utcnow()})
+        return out_bytes.getvalue()
+    except Exception as e:
+        print(f'[Thumb Error] {e}')
+        traceback.print_exc()
+        return config.DEFAULT_THUMB
 
 class Thumbnail :
 
