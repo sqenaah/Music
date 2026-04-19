@@ -300,10 +300,25 @@ def build_start_text() -> str:
     )
 
 
+async def get_bot_username() -> str:
+    if bot is None:
+        raise RuntimeError("Bot is not initialized")
+    if getattr(bot, "me", None) is not None and getattr(bot.me, "username", None):
+        return bot.me.username
+    me = await bot.get_me()
+    if getattr(me, "username", None):
+        return me.username
+    raise RuntimeError("Unable to determine bot username")
+
+
+async def get_group_invite_url() -> str:
+    username = await get_bot_username()
+    return f"https://t.me/{username}?startgroup=true"
+
+
 async def build_start_markup():
     kb = InlineKeyboardBuilder()
-    me = await bot.get_me()
-    kb.button(text="Добавить бота в чат", url=f"https://t.me/{me.username}?startgroup=true")
+    kb.button(text="Добавить бота в чат", url=await get_group_invite_url())
     return kb.as_markup()
 
 
@@ -822,7 +837,7 @@ async def start_playback_locked(
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url=await get_group_invite_url())],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
 
@@ -853,7 +868,7 @@ async def start_playback_locked(
                         InlineKeyboardButton(text="▷▷", callback_data="skip"),
                         InlineKeyboardButton(text="▢", callback_data="end"),
                     ],
-                    [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
+                    [InlineKeyboardButton(text="add me in your group", url=await get_group_invite_url())],
                     [InlineKeyboardButton(text="close", callback_data="close")],
                 ])
                 try:
@@ -901,7 +916,7 @@ async def progress_callback(query: CallbackQuery, state=None):
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url=await get_group_invite_url())],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
     try:
@@ -973,7 +988,7 @@ async def restart_callback(query: CallbackQuery):
             InlineKeyboardButton(text="▷▷", callback_data="skip"),
             InlineKeyboardButton(text="▢", callback_data="end"),
         ],
-        [InlineKeyboardButton(text="add me in your group", url="https://t.me/{}/?startgroup=true".format(bot.username if hasattr(bot, 'me.username') else 'muzza_test_bot'))],
+        [InlineKeyboardButton(text="add me in your group", url=await get_group_invite_url())],
         [InlineKeyboardButton(text="close", callback_data="close")],
     ])
     try:
