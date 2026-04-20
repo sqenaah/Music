@@ -36,7 +36,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
 from pytgcalls.exceptions import NoActiveGroupCall, NotInCallError, YtDlpError
 from pytgcalls import filters as tg_filters
-from telethon.sessions import StringSession
+from pyrogram import Client
+from pyrogram.types import Message as PyroMessage
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -108,9 +109,9 @@ PING_IMG_URL = getenv(
 API_TOKEN = os.getenv("API_TOKEN", "8275714086:AAFsZnOE2e2oXtykXtM5Xfewy8rwuUNMPy8")
 API_ID = int(os.getenv("API_ID", "32720364"))
 API_HASH = os.getenv("API_HASH", "6cd7fb90f58ae633d5b9352352f4febe")
-TELETHON_STRING_SESSION = os.getenv(
-    "TELETHON_STRING_SESSION",
-    "1ApWapzMBu7iavO-2J6D_s8N7xW7-np8Qn6pJ5KFpbk_5vYFxhGOBcOK8rZoF_M_Mo2sqRxUvzs3dpNc1XDef0sJeqL69fsMkz3FHYzbyW_2Cr-rU8H_NbBUTXKBD22VH4rC-eIMiUFNXuz0VQLT2sc4s3kipkFvCxTsZI5ldmay1Fg0LF-5yKn7eAaOvI45huFtkcwSJAj3RRzgpbPwpxmFNrqpyGvOHOVUfgERT7SFzwU6-LApWtko88xJuyZ4iE4WCNJfEMaeIy_rA5OykXLC_6xVhoWZf_QWQ9h45uCKA4Rdd9xlrj00NwQLlZImxuKobvBDhYffzB6gQwDcvr-JlUdO77gc="
+PYROGRAM_SESSION_STRING = os.getenv(
+    "PYROGRAM_SESSION_STRING",
+    "AgHzRewAgh26F-K1QxirTlScFAKkDcZx6ShvqR4usTifqNOzcasvQES8Gfj35dNt8ZT2W8DKt51NJBKVKpj1OSZos7m3SEfwpqaJ031zXrXfdu6zlu8iRVJ4YpOZwF-YvgUocIkiRt-kBTXJYlh1QbIE1_DhESImpZVUa_gY70XLjIrfo5jPxZsYyyu3ZsxnGrDyQZjdEF3Y2p2jAxM6gVV0tN3jS_NW9Xw_4FIyQlGdrE7Zuf9ZSTH8lwvx1cwQtuRaiSoSqSre1FugpIRiuVSfnDGd2E4moEsmvNRYTC3kuy5QFBnGk6-6VVxu1-841gtM_uHYfra9dACCVA4qfPByZdi-ywAAAAGLiIkKAA"
 )
 MONGO_URL = os.getenv(
     "MONGO_URL",
@@ -170,6 +171,22 @@ VIDEO_EXTENSIONS = {
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- Safe logging helper ---
+def log_media_info_safe(media_info, level="info", msg_prefix="media_info: "):
+    try:
+        safe_info = serialize_media_info(media_info)
+    except Exception as exc:
+        safe_info = f"[UNSERIALIZABLE: {exc}]"
+    msg = f"{msg_prefix}{safe_info}"
+    if level == "info":
+        logger.info(msg)
+    elif level == "warning":
+        logger.warning(msg)
+    elif level == "error":
+        logger.error(msg)
+    else:
+        print(msg)
 start_time = time.time()
 
 # === State Storage Classes ===
@@ -741,21 +758,19 @@ async def download_telegram_media(media_info: dict[str, Any]) -> Path:
         data, meta = cached
         return data
 
-    # Скачиваем файл через ассистент-бота (userbot/Telethon)
-    from telethon.tl.types import InputDocument
+    # Скачиваем файл через ассистент-бота (userbot/Pyrogram)
     import tempfile
     file_id = media_info.get("file_id")
     if not file_id:
-        raise ValueError("media_info missing file_id for Telethon download")
-    # Получаем сообщение с файлом через userbot
-    # Для этого нужен chat_id и message_id, которые должны быть в media_info
+        raise ValueError("media_info missing file_id for Pyrogram download")
     chat_id = media_info.get("chat_id")
     message_id = media_info.get("message_id")
     if not chat_id or not message_id:
-        raise ValueError("media_info missing chat_id or message_id for Telethon download")
-    msg = await userbot.get_messages(chat_id, ids=message_id)
+        raise ValueError("media_info missing chat_id or message_id for Pyrogram download")
+    # Получаем сообщение с файлом через userbot
+    msg: PyroMessage = await userbot.get_messages(chat_id, message_id)
     with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp_file:
-        await userbot.download_media(msg, file=tmp_file.name)
+        await msg.download(file_name=tmp_file.name)
         tmp_file.flush()
         tmp_path = tmp_file.name
     with open(tmp_path, "rb") as f:
@@ -1922,7 +1937,7 @@ async def main():
     # Инициализация асинхронных клиентов внутри event loop
     from aiogram import Bot, Dispatcher
     from aiogram.client.bot import DefaultBotProperties
-    from telethon import TelegramClient
+    # from telethon import TelegramClient
     from pytgcalls import PyTgCalls
 
 
@@ -1934,7 +1949,13 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
-    userbot = TelegramClient(StringSession(TELETHON_STRING_SESSION), API_ID, API_HASH)
+    userbot = Client(
+        name="userbot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=PYROGRAM_SESSION_STRING,
+        workdir=BASE_DIR
+    )
     voice_client = PyTgCalls(userbot)
 
 
