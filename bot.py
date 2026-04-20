@@ -736,12 +736,26 @@ async def download_telegram_media(media_info: dict[str, Any]) -> Path:
         data, meta = cached
         return data
 
-    from io import BytesIO
-    buf = BytesIO()
-    await bot.download(media_info["file"], destination=buf, timeout=MEDIA_DOWNLOAD_TIMEOUT)
-    data = buf.getvalue()
-    if mongo_cache is None:
-        raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
+    # Скачиваем файл через ассистент-бота (userbot/Telethon)
+    from telethon.tl.types import InputDocument
+    import tempfile
+    file_id = media_info.get("file_id")
+    if not file_id:
+        raise ValueError("media_info missing file_id for Telethon download")
+    # Получаем сообщение с файлом через userbot
+    # Для этого нужен chat_id и message_id, которые должны быть в media_info
+    chat_id = media_info.get("chat_id")
+    message_id = media_info.get("message_id")
+    if not chat_id or not message_id:
+        raise ValueError("media_info missing chat_id or message_id for Telethon download")
+    msg = await userbot.get_messages(chat_id, ids=message_id)
+    with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp_file:
+        await userbot.download_media(msg, file=tmp_file.name)
+        tmp_file.flush()
+        tmp_path = tmp_file.name
+    with open(tmp_path, "rb") as f:
+        data = f.read()
+    os.remove(tmp_path)
     await mongo_cache.save_file(cache_key, data, {"media_info": serialize_media_info(media_info)})
     return data
 
