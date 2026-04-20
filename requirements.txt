@@ -1,7 +1,7 @@
 pyrogram
 tgcrypto
 aiogram==3.27.0
-py-tgcalls==1.0.0-beta.27
+py-tgcalls
 aiohttp==3.9.5
 pydantic==2.5.3
 Pillow==12.1.0

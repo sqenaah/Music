@@ -1950,9 +1950,10 @@ async def main():
     )
     dp = Dispatcher()
     userbot = Client(
-        PYROGRAM_SESSION_STRING,
+        name="userbot",
         api_id=API_ID,
         api_hash=API_HASH,
+        session_string=PYROGRAM_SESSION_STRING,
         workdir=BASE_DIR
     )
     voice_client = PyTgCalls(userbot)
