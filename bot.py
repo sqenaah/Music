@@ -823,6 +823,7 @@ async def start_playback_locked(
         raise RuntimeError("MongoDB cache is not initialized. Please check bot startup sequence.")
 
     stream = build_stream(item)
+    print(f"[DEBUG] stream for play: {stream}")
     await voice_client.play(chat_id, stream=stream, config=GroupCallConfig(auto_start=True))
     state["current"] = item
     state["paused"] = False
