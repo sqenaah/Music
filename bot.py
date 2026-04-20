@@ -46,27 +46,32 @@ from mongo_cache_migration.mongo_cache import MongoCache
 
 # --- Serialization helpers ---
 def serialize_media_info(media_info):
-    # Handles aiogram types and dicts
-    if isinstance(media_info, dict):
-        result = {}
-        for k, v in media_info.items():
-            # Only keep serializable types
-            if isinstance(v, (str, int, float, bool, type(None))):
-                result[k] = v
-        return result
-    # aiogram objects
-    if hasattr(media_info, "file_id"):
-        return {
-            "file_id": getattr(media_info, "file_id", None),
-            "file_unique_id": getattr(media_info, "file_unique_id", None),
-            "duration": getattr(media_info, "duration", None),
-            "performer": getattr(media_info, "performer", None),
-            "title": getattr(media_info, "title", None),
-            "file_name": getattr(media_info, "file_name", None),
-            "mime_type": getattr(media_info, "mime_type", None),
-            "file_size": getattr(media_info, "file_size", None),
-        }
-    return str(media_info)
+    # Handles aiogram types and dicts, recursively, avoiding circular refs
+    seen = set()
+    def _serialize(obj):
+        if id(obj) in seen:
+            return None
+        seen.add(id(obj))
+        if isinstance(obj, dict):
+            return {k: _serialize(v) for k, v in obj.items() if isinstance(k, (str, int, float, bool, type(None)))}
+        elif isinstance(obj, list):
+            return [_serialize(v) for v in obj]
+        elif isinstance(obj, (str, int, float, bool, type(None))):
+            return obj
+        elif hasattr(obj, "file_id"):
+            return {
+                "file_id": getattr(obj, "file_id", None),
+                "file_unique_id": getattr(obj, "file_unique_id", None),
+                "duration": getattr(obj, "duration", None),
+                "performer": getattr(obj, "performer", None),
+                "title": getattr(obj, "title", None),
+                "file_name": getattr(obj, "file_name", None),
+                "mime_type": getattr(obj, "mime_type", None),
+                "file_size": getattr(obj, "file_size", None),
+            }
+        else:
+            return str(obj)
+    return _serialize(media_info)
 
 # For yt-dlp info dicts, remove unserializable objects
 def serialize_info(info):
@@ -764,6 +769,14 @@ async def build_reply_track(message: types.Message, media_message: types.Message
     media_info = detect_message_media(media_message)
     if not media_info:
         raise ValueError("В reply нет поддерживаемого аудио/видео файла.")
+
+    # Patch: Add chat_id and message_id for Telethon download
+    if hasattr(media_message, "chat") and hasattr(media_message.chat, "id"):
+        media_info["chat_id"] = media_message.chat.id
+    elif hasattr(media_message, "chat_id"):
+        media_info["chat_id"] = media_message.chat_id
+    if hasattr(media_message, "message_id"):
+        media_info["message_id"] = media_message.message_id
 
     if force_video and media_info["kind"] != "video":
         raise ValueError("Для /vplay нужен видеофайл или ссылка на видео.")
