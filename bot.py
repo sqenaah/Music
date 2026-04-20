@@ -1950,7 +1950,7 @@ async def main():
     )
     dp = Dispatcher()
     userbot = Client(
-        name="userbot",
+        session_name="userbot",
         api_id=API_ID,
         api_hash=API_HASH,
         session_string=PYROGRAM_SESSION_STRING,
