@@ -106,11 +106,11 @@ PING_IMG_URL = getenv(
     "https://image2url.com/r2/default/images/1768792821746-ad62ab76-1fdc-45d7-8b5e-a5343577d6bb.jpg"
 )
 API_TOKEN = os.getenv("API_TOKEN", "8275714086:AAFsZnOE2e2oXtykXtM5Xfewy8rwuUNMPy8")
-API_ID = int(os.getenv("API_ID", "27638882"))
-API_HASH = os.getenv("API_HASH", "f745cdd5ddb46cf841d6990048f52935")
+API_ID = int(os.getenv("API_ID", "32720364"))
+API_HASH = os.getenv("API_HASH", "6cd7fb90f58ae633d5b9352352f4febe")
 TELETHON_STRING_SESSION = os.getenv(
     "TELETHON_STRING_SESSION",
-    "1ApWapzMBu4bvMCVrj5iIKCL3MqsJ_08h39fffJvXScUVacmHaD4Q5Cl9Z7alqsgXHvWh0p1p1QhP2B5OXsQS8MTO2Wr6G4YJOAtyhkwqJTWE8gLkJTv7_k-edQDPsz_B94Qk-8DAFbsVIZ6Z1MvEEv5Kw34X9DEitcVV_rUR5TYmQ0Pod30uj_TZoCFzyqClbnSKQ5GB8Rin5euJF4IhJvzqLZ7gFGVRNVMvQFgsOVHgTfv6Mz2HyNi0VEsOhKtQJRPB8LELgzxHDWZQs2iL9_QAtFjPZfQBLR5J5RAgeBBWTWucCoynazkSbm27LwEf9yoPFr61GfTdRtML4zTGHhWcd_9TMjI="
+    "1ApWapzMBu7iavO-2J6D_s8N7xW7-np8Qn6pJ5KFpbk_5vYFxhGOBcOK8rZoF_M_Mo2sqRxUvzs3dpNc1XDef0sJeqL69fsMkz3FHYzbyW_2Cr-rU8H_NbBUTXKBD22VH4rC-eIMiUFNXuz0VQLT2sc4s3kipkFvCxTsZI5ldmay1Fg0LF-5yKn7eAaOvI45huFtkcwSJAj3RRzgpbPwpxmFNrqpyGvOHOVUfgERT7SFzwU6-LApWtko88xJuyZ4iE4WCNJfEMaeIy_rA5OykXLC_6xVhoWZf_QWQ9h45uCKA4Rdd9xlrj00NwQLlZImxuKobvBDhYffzB6gQwDcvr-JlUdO77gc="
 )
 MONGO_URL = os.getenv(
     "MONGO_URL",
@@ -1990,4 +1990,22 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as exc:
+        # Try to log media_info safely if present in exception args
+        import sys
+        from traceback import print_exc
+        print("[ERROR] Unhandled exception:", exc)
+        # Try to find media_info in exception args and log it safely
+        for arg in getattr(exc, 'args', []):
+            if isinstance(arg, dict) and 'media_info' in arg:
+                from pprint import pprint
+                print("[ERROR] media_info (safe):")
+                try:
+                    pprint(serialize_media_info(arg['media_info']))
+                except Exception as serr:
+                    print("[ERROR] Failed to serialize media_info:", serr)
+        print_exc()
+    except (KeyboardInterrupt, SystemExit):
+        pass
